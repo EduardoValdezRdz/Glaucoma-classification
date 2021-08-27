@@ -1,0 +1,123 @@
+from random import shuffle
+import glob
+import numpy as np
+import cv2
+import h5py
+from PIL import Image
+import os
+import random
+import keras
+from keras.utils import multi_gpu_model
+from keras import layers
+import h5py
+from keras.models import Model
+from keras.layers import Input, Flatten, Dense, MaxPooling2D, UpSampling2D, Reshape, core, Dropout, Conv2DTranspose, BatchNormalization, Activation
+from keras.layers.convolutional import Conv2D, Conv2DTranspose
+from keras.layers.merge import concatenate
+import threading
+from keras.utils import plot_model
+import cv2
+from keras import backend as K
+from keras.utils import to_categorical
+import matplotlib.pyplot as plt
+
+images_glau = 'withoutglaucoma/*.png' #folder adress of the images with glaucoma
+images_san = 'glaucoma/*.png'#folder adress of the images without glaucoma
+
+addrs_glau = glob.glob(images_glau)
+addrs_san = glob.glob(images_san)
+
+a = len(addrs_glau)
+b = len(addrs_san)
+print(a)
+print(b)
+
+labels_glau = np.ones((a, 1))
+labels_sanas = np.zeros((b, 1))
+
+full_data_train = addrs_glau + addrs_san
+full_data_labels = labels_glau.tolist() + labels_sanas.tolist()
+
+d = list(zip(full_data_train, full_data_labels))
+shuffle(d)
+full_data_train, full_data_labels = zip(*d)
+
+labels = to_categorical(full_data_labels)
+
+sia = 173
+sib = 173
+
+def proceesar_rgb(ruta_rgb):
+    imgd = Image.open(ruta_rgb)  # Replace with your image name here
+    imgd = np.array(imgd)
+    imgd = cv2.resize(imgd, (sib, sia))
+    max_val = float(np.iinfo(imgd.dtype).max)
+    imgd = imgd/max_val
+    imgd = imgd.astype('float32')
+    auxd = np.zeros((sia, sib, 3), np.float32)
+    auxd[:, :, :] = imgd[:, :, 0:3]
+    auxd = np.transpose(auxd, (2, 0, 1))
+    return auxd
+    
+def generator(image_file_list, labels_list, batch_size):
+    i = 0
+    while True:
+        batch = {'images': [], 'labels': []}  # use a dict for multiple inputs
+        for b in range(batch_size):
+            if i == len(image_file_list):
+                i = 0
+            sample = image_file_list[i]
+            sample2 = labels_list[i]
+            image_file_path = sample
+            image_file_path2 = sample2
+            i += 1
+            image = proceesar_rgb(image_file_path)
+            labels = image_file_path2
+            #print(labels)
+            batch['images'].append(image)
+            batch['labels'].append(labels)
+        batch['images'] = np.array(batch['images'])
+        batch['labels'] = np.array(batch['labels'])
+        yield batch['images'], batch['labels']
+        
+def data_statistic(train_dataset):
+    len(train_dataset)
+    return len(train_dataset)
+
+data_format = 'channels_first'
+
+entrada = Input(shape=(3, sia, sib))
+network = Conv2D(96, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(entrada)
+network = Conv2D(96, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = MaxPooling2D(pool_size=(2, 2), data_format=data_format)(network)
+network = Conv2D(256, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = Conv2D(256, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = MaxPooling2D(pool_size=(2, 2), data_format=data_format)(network)
+network = Conv2D(384, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = Conv2D(384, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = MaxPooling2D(pool_size=(2, 2), data_format=data_format)(network)
+network = Conv2D(256, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = Conv2D(256, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = Flatten(data_format=data_format)(network)
+network = Dense(1024, use_bias=True, activation='relu')(network)
+network = Dense(1024, use_bias=True, activation='relu')(network)
+out = Dense(2, use_bias=True, activation='softmax')(network)
+
+model = Model(inputs=entrada, outputs=out)
+model.compile(loss='categorical_crossentropy',
+              optimizer='sgd',
+              metrics=['accuracy'])
+model.summary()
+
+batch_size = 17
+train_generator = generator(full_data_train, labels, batch_size)
+nb_train_samples = data_statistic(full_data_train)
+print('train samples: %d' % nb_train_samples)
+
+model.fit_generator(epochs=100, generator=train_generator, steps_per_epoch=nb_train_samples // batch_size)
+
+model_json = model.to_json()
+with open('model.json', 'w') as json_file: #Select folder tosave the model weights
+    json_file.write(model_json)
+model.save_weights('RNA.h5')#Select folder tosave the model weights
+    
