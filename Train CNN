@@ -120,4 +120,3 @@ model_json = model.to_json()
 with open('model.json', 'w') as json_file: #Select folder tosave the model weights
     json_file.write(model_json)
 model.save_weights('RNA.h5')#Select folder tosave the model weights
-    
