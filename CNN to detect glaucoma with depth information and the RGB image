@@ -1,0 +1,174 @@
+from random import shuffle
+import glob
+import numpy as np
+import cv2
+import h5py
+from PIL import Image
+import os
+import random
+import keras
+from keras.utils import multi_gpu_model
+from keras import layers
+import h5py
+from keras.models import Model
+from keras.layers import Input, Flatten, Dense, MaxPooling2D, UpSampling2D, Reshape, core, Dropout, Conv2DTranspose, BatchNormalization, Activation
+from keras.layers.convolutional import Conv2D, Conv2DTranspose, Conv3D, Conv3DTranspose, MaxPooling3D
+from keras.layers.merge import concatenate
+import threading
+from keras.utils import plot_model
+import cv2
+import numpy as np
+from keras import backend as K
+from keras.utils import to_categorical
+import matplotlib.pyplot as plt
+import tensorflow as tf
+import keras.backend.tensorflow_backend as tfback
+from tensorflow.keras.models import model_from_json
+
+
+print("tf.__version__ is", tf.__version__)
+print("tf.keras.__version__ is:", tf.keras.__version__)
+
+def _get_available_gpus():
+    """Get a list of available gpu devices (formatted as strings).
+
+    # Returns
+        A list of available GPU devices.
+    """
+    #global _LOCAL_DEVICES
+    if tfback._LOCAL_DEVICES is None:
+        devices = tf.config.list_logical_devices()
+        tfback._LOCAL_DEVICES = [x.name for x in devices]
+    return [x for x in tfback._LOCAL_DEVICES if 'device:gpu' in x.lower()]
+
+tfback._get_available_gpus = _get_available_gpus
+
+def l2_loss(y_true, y_pred):
+    alpha = 0.001
+    loss = (K.sum((y_pred-y_true)**2)/2)*alpha
+    return loss
+
+json_file = open('model.json', 'r') #Edit and select folder to the saved weights from the depth estimation CNN
+loaded_model_json = json_file.read()
+json_file.close()
+loaded_model = model_from_json(loaded_model_json)
+loaded_model.load_weights("/RNA.h5") #Edit and select folder to the saved weights from the depth estimation CNN
+print("Loaded model from disk")
+loaded_model.compile(loss=l2_loss, optimizer='sgd', metrics=['accuracy'])
+
+images_glau = 'parches_glaucoma_sa/*.png' #Edit and select folder adress to the images with glaucoma
+images_san = 'parches_sanos_sa/*.png' #Edit and select folder to the images without glaucoma
+
+addrs_glau = glob.glob(images_glau)
+addrs_san = glob.glob(images_san)
+
+a = len(addrs_glau)
+b = len(addrs_san)
+print(a)
+print(b)
+
+def display_one(a, title1 = "Original"):
+    plt.imshow(a, cmap='gray'), plt.title(title1)
+    plt.show()
+
+def display_rgb(a, title1 = "Originakl"):
+    plt.imshow(a), plt.title(title1)
+    plt.show()
+
+labels_glau = np.ones((a, 1))
+labels_sanas = np.zeros((b, 1))
+
+full_data_train = addrs_glau + addrs_san
+full_data_labels = labels_glau.tolist() + labels_sanas.tolist()
+
+d = list(zip(full_data_train, full_data_labels))
+shuffle(d)
+full_data_train, full_data_labels = zip(*d)
+
+labels = to_categorical(full_data_labels)
+
+sia = 352
+sib = 352
+
+def proceesar_rgb(ruta_rgb):
+    rgbaux = np.zeros((1, 3, sia, sib))
+    imgd = Image.open(ruta_rgb)  
+    imgd = cv2.resize(imgd, (sib, sia))
+    max_val = float(np.iinfo(imgd.dtype).max)
+    imgd = imgd/max_val
+    imgd = imgd.astype('float32')
+    auxd = np.zeros((sia, sib, 4), np.float32)
+    auxd[:, :, 0:3] = imgd[:, :, 0:3]
+    auxd = np.transpose(auxd, (2, 0, 1))
+    rgbaux[0] = auxd[0:3, :, :]
+    score = loaded_model.predict(rgbaux)
+    auxd[3:4, :, :] = score[0, 0, :, :]
+    return auxd
+
+im = proceesar_rgb(full_data_train[20])
+display_one(im[3, :, :])
+hr = np.transpose(im, (2, 1, 0))
+display_rgb(hr[:, :, 0:3])
+
+def generator(image_file_list, labels_list, batch_size):
+    i = 0
+    while True:
+        batch = {'images': [], 'labels': []}
+        for b in range(batch_size):
+            if i == len(image_file_list):
+                i = 0
+            sample = image_file_list[i]
+            sample2 = labels_list[i]
+            image_file_path = sample
+            image_file_path2 = sample2
+            i += 1
+            image = proceesar_rgb(image_file_path)
+            labels = image_file_path2
+            #print(labels)
+            batch['images'].append(image)
+            batch['labels'].append(labels)
+        batch['images'] = np.array(batch['images'])
+        batch['labels'] = np.array(batch['labels'])
+        yield batch['images'], batch['labels']
+
+def data_statistic(train_dataset):
+    len(train_dataset)
+    return len(train_dataset)
+
+data_format = 'channels_first'
+
+entrada = Input(shape=(4, sia, sib))
+network = Conv2D(96, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(entrada)
+network = Conv2D(96, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = MaxPooling2D(pool_size=(2, 2), data_format=data_format)(network)
+network = Conv2D(256, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = Conv2D(256, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = MaxPooling2D(pool_size=(2, 2), data_format=data_format)(network)
+network = Conv2D(384, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = Conv2D(384, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = MaxPooling2D(pool_size=(2, 2), data_format=data_format)(network)
+network = Conv2D(256, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = Conv2D(256, 3, bias=True, strides=(1, 1), activation='relu', padding='same', data_format=data_format)(network)
+network = Flatten(data_format=data_format)(network)
+network = Dense(1024, use_bias=True, activation='relu')(network)
+network = Dense(1024, use_bias=True, activation='relu')(network)
+out = Dense(2, use_bias=True, activation='softmax')(network)
+
+model = Model(inputs=entrada, outputs=out)
+model.compile(loss='categorical_crossentropy',
+              optimizer='sgd',
+              metrics=['accuracy'])
+model.summary()
+
+batch_size = 7
+train_generator = generator(full_data_train, labels, batch_size)
+nb_train_samples = data_statistic(full_data_train)
+print('train samples: %d' % nb_train_samples)
+
+model.fit_generator(epochs=100, generator=train_generator, steps_per_epoch=nb_train_samples//batch_size)
+
+model_json = model.to_json()
+with open('model.json', 'w') as json_file: #Edit and select folder to save the weights
+    json_file.write(model_json)
+model.save_weights('RNA.h5')#Edit and select folder to save the weights
+
